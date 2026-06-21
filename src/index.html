@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>安徽上岩科技 AI 工具站</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main id="app-shell" class="app-shell is-locked">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Anhui Shangyan Technology</p>
+          <h1><img class="brand-logo" src="/assets/shangyan-logo.svg" alt="" />安徽上岩科技 AI 工具站</h1>
+        </div>
+        <div class="top-actions">
+          <span id="status-pill" class="status-pill">准备就绪</span>
+          <button id="switch-access" class="ghost-button" type="button">切换访问码</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <form id="generate-form" class="control-panel">
+          <div class="panel-heading">
+            <p class="eyebrow">Image Studio</p>
+            <h2>AI 生图配置</h2>
+          </div>
+
+          <input type="hidden" name="mode" value="image" />
+
+          <label class="field">
+            <span>模型</span>
+            <select name="model">
+              <option value="gpt-image-2" selected>gpt-image-2</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>提示词</span>
+            <textarea name="prompt" rows="5" placeholder="描述商品、模特、场景、构图、光线、风格等..." required></textarea>
+          </label>
+
+          <label class="field">
+            <span>反向提示词</span>
+            <textarea name="negativePrompt" rows="2" placeholder="不想出现的元素，例如：低清晰度、手指畸形、文字水印"></textarea>
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>画幅</span>
+              <select name="ratio">
+                <option value="9:16" selected>9:16 TikTok 竖版</option>
+                <option value="1:1">1:1 商品方图</option>
+                <option value="4:5">4:5 信息流</option>
+                <option value="16:9">16:9 横版</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>质量</span>
+              <select name="quality">
+                <option value="high" selected>高质量</option>
+                <option value="medium">标准质量</option>
+                <option value="low">快速质量</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>清晰度档位</span>
+            <select name="clarity">
+              <option value="low">1K 标准清晰度</option>
+              <option value="medium">2K 高清晰度</option>
+              <option value="high" selected>4K 超清晰度</option>
+            </select>
+          </label>
+
+          <label class="upload-field">
+            <span>参考图</span>
+            <input id="referenceImage" name="referenceImage" type="file" accept="image/*" multiple />
+            <strong>上传参考图</strong>
+            <small id="referenceImageName">可多选商品图、模特图、风格图，最多取前 6 张。</small>
+          </label>
+
+          <button id="submit-button" class="primary-button" type="submit">开始生成</button>
+
+          <div class="panel-actions">
+            <button id="open-history" type="button" class="ghost-button">查看历史记录</button>
+            <button id="clear-history" type="button" class="ghost-button">清空</button>
+          </div>
+        </form>
+
+        <section class="output-panel">
+          <div class="panel-heading">
+            <p class="eyebrow">Output Library</p>
+            <h2>生成目录</h2>
+          </div>
+          <div id="results" class="results"></div>
+        </section>
+      </section>
+    </main>
+
+    <section id="access-screen" class="access-screen is-open">
+      <form id="access-form" class="access-card">
+        <img class="access-logo" src="/assets/shangyan-logo.svg" alt="" />
+        <h2>内部访问</h2>
+        <p>请输入安徽上岩科技内部访问码。</p>
+        <input name="accessCode" type="password" placeholder="访问码" autocomplete="current-password" required />
+        <button type="submit" class="primary-button">进入工具站</button>
+        <small id="access-error" class="error-text"></small>
+      </form>
+    </section>
+
+    <template id="result-template">
+      <article class="result-card">
+        <header>
+          <strong>AI 生图</strong>
+          <time></time>
+        </header>
+        <p></p>
+        <div class="preview"></div>
+        <div class="result-actions"></div>
+        <details>
+          <summary>查看提示词和原始结果</summary>
+          <pre></pre>
+        </details>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
