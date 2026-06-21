@@ -25,6 +25,18 @@ type WorkerRequest = {
   payload?: GenerateRequest;
 };
 
+type RequestInfo = {
+  clarity: string;
+  endpoint: string;
+  model: string;
+  promptChanged?: boolean;
+  quality: string;
+  ratio: string;
+  referenceCount: number;
+  safePrompt?: string;
+  size: string;
+};
+
 type JobResult = {
   completedAt?: string;
   createdAt?: string;
@@ -33,16 +45,7 @@ type JobResult = {
   images?: Array<{ url: string }>;
   jobId?: string;
   prompt?: string;
-  request?: {
-    clarity: string;
-    model: string;
-    promptChanged?: boolean;
-    quality: string;
-    ratio: string;
-    referenceCount: number;
-    safePrompt?: string;
-    size: string;
-  };
+  request?: RequestInfo;
   result?: unknown;
   response?: unknown;
   status: "queued" | "running" | "done" | "error";
@@ -70,6 +73,14 @@ const getApiKey = async () => {
   const store = getStore("ai-private-config", { consistency: "strong" });
   const fromBlob = await store.get("AI_IMAGE_API_KEY", { type: "text" });
   return (fromBlob ?? "").trim();
+};
+
+const generationUrl = () => getEnv("AI_IMAGE_API_URL") || fallbackEnv.AI_IMAGE_API_URL;
+
+const editUrl = () => {
+  const explicit = getEnv("AI_IMAGE_EDIT_API_URL");
+  if (explicit) return explicit;
+  return generationUrl().replace(/\/images\/generations\/?$/, "/images/edits");
 };
 
 const normalizeModel = (model?: string) => {
@@ -194,19 +205,42 @@ const extractImageUrls = (data: unknown) => {
   return urls;
 };
 
-const authHeaders = async () => {
+const authHeader = async () => {
   const apiKey = await getApiKey();
   if (!apiKey) throw new Error("AI_IMAGE_API_KEY is missing.");
 
-  const authHeader = getEnv("AI_IMAGE_API_AUTH_HEADER") || "Authorization";
-  const authPrefix = getEnv("AI_IMAGE_API_AUTH_PREFIX") || "Bearer";
+  const headerName = getEnv("AI_IMAGE_API_AUTH_HEADER") || "Authorization";
+  const prefix = getEnv("AI_IMAGE_API_AUTH_PREFIX") || "Bearer";
+  return { headerName, value: prefix ? `${prefix} ${apiKey}` : apiKey };
+};
+
+const jsonHeaders = async () => {
+  const auth = await authHeader();
   return {
-    [authHeader]: authPrefix ? `${authPrefix} ${apiKey}` : apiKey,
+    [auth.headerName]: auth.value,
     "content-type": "application/json",
   };
 };
 
-const buildRequestBodies = (payload: GenerateRequest) => {
+const dataUrlToBlob = (dataUrl: string, index: number) => {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error("Reference image data is invalid.");
+
+  const contentType = match[1] || "image/jpeg";
+  const isBase64 = Boolean(match[2]);
+  const payload = match[3] || "";
+  const bytes = isBase64
+    ? Uint8Array.from(atob(payload), (char) => char.charCodeAt(0))
+    : new TextEncoder().encode(decodeURIComponent(payload));
+  const extension = contentType.includes("png") ? "png" : "jpg";
+
+  return {
+    blob: new Blob([bytes], { type: contentType }),
+    filename: `reference-${index + 1}.${extension}`,
+  };
+};
+
+const buildRequest = (payload: GenerateRequest) => {
   const model = normalizeModel(payload.model);
   const quality = normalizeQuality(payload.quality);
   const clarity = normalizeClarity(payload.clarity, payload.resolution);
@@ -224,79 +258,84 @@ const buildRequestBodies = (payload: GenerateRequest) => {
   const prompt = [safePrompt, negativePrompt ? `Avoid: ${negativePrompt}` : ""]
     .filter(Boolean)
     .join("\n\n");
-
-  const common = {
+  const request: RequestInfo = {
+    clarity,
+    endpoint: references.length ? "edits" : "generations",
     model,
-    prompt,
+    promptChanged: safePrompt !== originalPrompt,
     quality,
-    resolution: clarity.toLowerCase(),
+    ratio,
+    referenceCount: references.length,
+    safePrompt,
     size,
-    n: 1,
   };
 
-  const bodies: unknown[] = [];
-  if (references.length) {
-    bodies.push({ ...common, image: references.length === 1 ? references[0] : references });
-    bodies.push({ ...common, images: references });
-    bodies.push({ ...common, reference_images: references });
-    bodies.push({ ...common, input_images: references });
+  return { model, prompt, quality, references, request, size };
+};
+
+const readApiResponse = async (response: Response) => {
+  const text = await response.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
   }
-  bodies.push(common);
+  return { data, text };
+};
 
-  return {
-    bodies,
-    request: {
-      clarity,
-      model,
-      promptChanged: safePrompt !== originalPrompt,
-      quality,
-      ratio,
-      referenceCount: references.length,
-      safePrompt,
-      size,
-    },
-  };
+const callGenerationApi = async (payload: GenerateRequest) => {
+  const { model, prompt, quality, request, size } = buildRequest(payload);
+  const response = await fetch(generationUrl(), {
+    method: "POST",
+    headers: await jsonHeaders(),
+    body: JSON.stringify({ model, prompt, quality, size, n: 1 }),
+  });
+  const { data, text } = await readApiResponse(response);
+  return { data, request, response, text };
+};
+
+const callEditApi = async (payload: GenerateRequest) => {
+  const { model, prompt, quality, references, request, size } = buildRequest(payload);
+  const auth = await authHeader();
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("quality", quality);
+  form.append("size", size);
+  form.append("n", "1");
+
+  references.forEach((reference, index) => {
+    const { blob, filename } = dataUrlToBlob(reference, index);
+    form.append("image", blob, filename);
+  });
+
+  const response = await fetch(editUrl(), {
+    method: "POST",
+    headers: { [auth.headerName]: auth.value },
+    body: form,
+  });
+  const { data, text } = await readApiResponse(response);
+  return { data, request, response, text };
 };
 
 const callImageApi = async (payload: GenerateRequest) => {
-  const apiUrl = getEnv("AI_IMAGE_API_URL") || fallbackEnv.AI_IMAGE_API_URL;
-  const headers = await authHeaders();
-  const { bodies, request } = buildRequestBodies(payload);
-  let lastError = "";
+  const references = collectReferenceImages(payload);
+  const result = references.length ? await callEditApi(payload) : await callGenerationApi(payload);
 
-  for (const body of bodies) {
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    const text = await response.text();
-    let data: unknown = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = { raw: text };
-    }
-
-    if (response.ok) {
-      const urls = extractImageUrls(data);
-      if (urls.length) return { data, request, urls };
-      lastError = "The AI API returned no image URL.";
-      continue;
-    }
-
-    const message = (data as { error?: { message?: string }; message?: string })?.error?.message
-      ?? (data as { error?: string; message?: string })?.error
-      ?? (data as { message?: string })?.message
-      ?? text
-      ?? `${response.status} ${response.statusText}`;
-    lastError = formatApiError(String(message));
-
-    if (/安全系统拦截/.test(lastError) || !request.referenceCount) break;
+  if (result.response.ok) {
+    const urls = extractImageUrls(result.data);
+    if (urls.length) return { data: result.data, request: result.request, urls };
+    throw new Error("The AI API returned no image URL.");
   }
 
-  throw new Error(lastError || "AI API request failed.");
+  const data = result.data;
+  const message = (data as { error?: { message?: string }; message?: string })?.error?.message
+    ?? (data as { error?: string; message?: string })?.error
+    ?? (data as { message?: string })?.message
+    ?? result.text
+    ?? `${result.response.status} ${result.response.statusText}`;
+  throw new Error(formatApiError(String(message)));
 };
 
 export default async (req: Request) => {
