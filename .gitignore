@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+.codex-temp/
+.netlify/
+*.zip
+*.msi
+*.exe
+*.log
+Wireshark/
