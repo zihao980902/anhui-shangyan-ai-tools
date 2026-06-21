@@ -36,9 +36,11 @@ type JobResult = {
   request?: {
     clarity: string;
     model: string;
+    promptChanged?: boolean;
     quality: string;
     ratio: string;
     referenceCount: number;
+    safePrompt?: string;
     size: string;
   };
   result?: unknown;
@@ -135,6 +137,41 @@ const collectReferenceImages = (payload: GenerateRequest) => {
   return [...new Set(images)];
 };
 
+const sanitizeFashionPrompt = (prompt: string) => {
+  const replacements: Array<[RegExp, string]> = [
+    [/露脐装/g, "短款上衣"],
+    [/露脐/g, "短款上衣版型"],
+    [/肚脐/g, "腰线上方的服装剪裁"],
+    [/辣妹/g, "潮流时装"],
+    [/性感/g, "时尚自信"],
+    [/火辣/g, "醒目潮流"],
+    [/妩媚/g, "精致"],
+    [/撩人/g, "吸睛"],
+    [/身材火辣/g, "身形修长"],
+    [/上衣.*很少/g, "短款上衣搭配高腰下装"],
+  ];
+
+  let safePrompt = prompt;
+  for (const [pattern, replacement] of replacements) {
+    safePrompt = safePrompt.replace(pattern, replacement);
+  }
+
+  const guidance = [
+    "成人模特，服装电商展示图。",
+    "重点展示服装版型、面料、搭配、光线和构图。",
+    "不要强调裸露身体部位，不要色情化表达，不要未成年人。",
+  ].join(" ");
+
+  return `${safePrompt}\n\n${guidance}`;
+};
+
+const formatApiError = (message: string) => {
+  if (/safety|safety_violation|sexual|rejected by the safety system/i.test(message)) {
+    return "提示词被 AI 安全系统拦截。请改成服装展示表达，例如：短款上衣、潮流时装风、成人模特、展示服装版型和搭配；避免露脐、肚脐、辣妹、性感等身体或挑逗词。";
+  }
+  return message;
+};
+
 const extractImageUrls = (data: unknown) => {
   const response = data as {
     data?: Array<{ b64_json?: string; url?: string }>;
@@ -176,7 +213,15 @@ const buildRequestBodies = (payload: GenerateRequest) => {
   const ratio = normalizeRatio(payload.ratio);
   const size = sizeFor(ratio, clarity, payload.size);
   const references = collectReferenceImages(payload);
-  const prompt = [payload.prompt?.trim(), payload.negativePrompt?.trim() ? `Avoid: ${payload.negativePrompt.trim()}` : ""]
+  const originalPrompt = payload.prompt?.trim() || "";
+  const safePrompt = sanitizeFashionPrompt(originalPrompt);
+  const negativePrompt = [
+    payload.negativePrompt?.trim(),
+    "nudity, sexualized pose, explicit content, minor, teenager, child, underwear focus, body exposure focus",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const prompt = [safePrompt, negativePrompt ? `Avoid: ${negativePrompt}` : ""]
     .filter(Boolean)
     .join("\n\n");
 
@@ -203,9 +248,11 @@ const buildRequestBodies = (payload: GenerateRequest) => {
     request: {
       clarity,
       model,
+      promptChanged: safePrompt !== originalPrompt,
       quality,
       ratio,
       referenceCount: references.length,
+      safePrompt,
       size,
     },
   };
@@ -244,9 +291,9 @@ const callImageApi = async (payload: GenerateRequest) => {
       ?? (data as { message?: string })?.message
       ?? text
       ?? `${response.status} ${response.statusText}`;
-    lastError = String(message);
+    lastError = formatApiError(String(message));
 
-    if (!request.referenceCount) break;
+    if (/安全系统拦截/.test(lastError) || !request.referenceCount) break;
   }
 
   throw new Error(lastError || "AI API request failed.");
