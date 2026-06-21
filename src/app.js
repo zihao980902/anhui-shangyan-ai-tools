@@ -67,6 +67,16 @@ const normalizeError = (message) => {
   return text;
 };
 
+const parseJsonResponse = async (response) => {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(`接口返回异常（HTTP ${response.status}）：${preview || "返回内容不是 JSON"}`);
+  }
+};
+
 const compactValue = (value, depth = 0) => {
   if (depth > 6) return "[已省略]";
   if (typeof value === "string") {
@@ -199,7 +209,7 @@ const upsertHistoryItem = (item) => {
 const waitForJob = async (jobId, pendingItem) => {
   for (let attempt = 1; attempt <= 240; attempt += 1) {
     const response = await fetch(`/api/result/${jobId}`);
-    const body = await response.json();
+    const body = await parseJsonResponse(response);
 
     if (!response.ok || body.ok === false || body.status === "error") {
       throw new Error(body.error || "生成失败");
@@ -232,7 +242,7 @@ const resizeImage = (file) =>
       const image = new Image();
       image.onerror = () => reject(new Error("参考图格式不支持"));
       image.onload = () => {
-        const maxSide = 1600;
+        const maxSide = 1024;
         const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
         const width = Math.round(image.width * scale);
         const height = Math.round(image.height * scale);
@@ -240,7 +250,7 @@ const resizeImage = (file) =>
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d").drawImage(image, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.9));
+        resolve(canvas.toDataURL("image/jpeg", 0.78));
       };
       image.src = reader.result;
     };
@@ -282,7 +292,7 @@ const refreshJob = async (jobId, item) => {
   try {
     setStatus("刷新中", "busy");
     const response = await fetch(`/api/result/${jobId}`);
-    const body = await response.json();
+    const body = await parseJsonResponse(response);
     if (!response.ok || body.status === "error") throw new Error(body.error || "刷新失败");
 
     upsertHistoryItem({
@@ -396,7 +406,7 @@ const checkAccess = async (accessCode) => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ accessCode }),
   });
-  const body = await response.json();
+  const body = await parseJsonResponse(response);
   if (!response.ok) throw new Error(body.error || "访问码校验失败");
 };
 
@@ -452,7 +462,7 @@ form.addEventListener("submit", async (event) => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(data),
     });
-    const body = await response.json();
+    const body = await parseJsonResponse(response);
     if (!response.ok || body.ok === false) throw new Error(body.error || "生成失败");
 
     const createdAt = new Date().toISOString();
