@@ -1,0 +1,14 @@
+{
+  "name": "anhui-shangyan-ai-tools",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "node ./scripts/build.js"
+  },
+  "devDependencies": {
+    "@netlify/blobs": "latest",
+    "@netlify/functions": "latest",
+    "netlify-cli": "latest"
+  }
+}
