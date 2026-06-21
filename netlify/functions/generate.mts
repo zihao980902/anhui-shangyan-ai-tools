@@ -59,6 +59,7 @@ export default async (req: Request) => {
   await store.setJSON(jobId, {
     createdAt,
     jobId,
+    payload: { ...payload, prompt },
     prompt,
     status: "queued",
     updatedAt: createdAt,
@@ -68,7 +69,7 @@ export default async (req: Request) => {
   const workerResponse = await fetch(workerUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jobId, payload: { ...payload, prompt } }),
+    body: JSON.stringify({ jobId }),
   });
 
   if (!workerResponse.ok) {
