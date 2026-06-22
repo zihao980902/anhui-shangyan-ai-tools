@@ -13,6 +13,7 @@ const switchAccess = document.querySelector("#switch-access");
 const toggleHistory = document.querySelector("#toggle-history");
 const referenceImage = document.querySelector("#referenceImage");
 const referenceImageName = document.querySelector("#referenceImageName");
+const modelNote = document.querySelector("#model-note");
 
 const storageKey = "fashion-ai-studio-history-v2";
 const accessKey = "fashion-ai-studio-access-code";
@@ -49,6 +50,7 @@ const setStatus = (text, tone = "ready") => {
 
 const normalizeError = (message) => {
   const text = String(message || "");
+  if (/all_retries_failed/i.test(text)) return "Midjourney 代理多次重试都失败了。请先用更短、更简单的提示词测试；如果连续失败，通常是云雾 MJ 通道或分组暂时不可用。";
   if (/failed to fetch|fetch failed|network|ENOTFOUND|ECONN|ETIMEDOUT|timeout/i.test(text)) {
     return "连接生成接口失败。通常是参考图仍然太大、网络中断，或浏览器缓存还没刷新。请按 Ctrl + F5 后先用 1 张参考图再试。";
   }
@@ -298,7 +300,7 @@ const renderHistory = () => {
       button.addEventListener("click", () => downloadDirect(image.src, filename));
       actions.append(button);
     } else if (jobId && (status === "queued" || status === "running")) {
-      preview.innerHTML = "<span class=\"loading-text\">生成中，请稍等。2K/4K 或参考图任务会更慢。</span>";
+      preview.innerHTML = "<span class=\"loading-text\">生成中，请稍等。Midjourney 任务通常会更慢。</span>";
       const button = document.createElement("button");
       button.className = "download-button";
       button.type = "button";
@@ -310,6 +312,19 @@ const renderHistory = () => {
     }
     results.append(node);
   }
+};
+
+const updateModelMode = () => {
+  const model = new FormData(form).get("model");
+  const isMj = isMidjourneyModel(model);
+  form.classList.toggle("is-midjourney", isMj);
+  if (modelNote) {
+    modelNote.hidden = !isMj;
+    modelNote.textContent = "Midjourney 会返回四宫格预览图，清晰度档位和参考图不参与；需要单张高清图时可后续再接入放大功能。";
+  }
+  referenceImage.disabled = isMj;
+  if (isMj) referenceImage.value = "";
+  referenceImageName.textContent = isMj ? "Midjourney 当前仅支持文生图。" : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
 };
 
 const lockApp = () => { appShell.classList.add("is-locked"); accessScreen.classList.add("is-open"); };
@@ -340,7 +355,7 @@ referenceImage.addEventListener("change", () => {
   const files = Array.from(referenceImage.files || []);
   const model = new FormData(form).get("model");
   if (isMidjourneyModel(model)) {
-    referenceImageName.textContent = files.length > 0 ? "Midjourney 当前仅支持文生图，请不要上传参考图。" : "Midjourney 当前仅支持文生图。";
+    referenceImageName.textContent = "Midjourney 当前仅支持文生图。";
     return;
   }
   referenceImageName.textContent = files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
@@ -348,10 +363,7 @@ referenceImage.addEventListener("change", () => {
 
 form.addEventListener("change", (event) => {
   if (event.target?.name !== "model") return;
-  const files = Array.from(referenceImage.files || []);
-  referenceImageName.textContent = isMidjourneyModel(event.target.value)
-    ? "Midjourney 当前仅支持文生图。"
-    : files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
+  updateModelMode();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -405,6 +417,7 @@ openHistory.addEventListener("click", () => { renderHistory(); results.scrollInt
 
 const initAccess = async () => {
   renderHistory();
+  updateModelMode();
   const savedAccessCode = sessionStorage.getItem(accessKey);
   if (!savedAccessCode) return lockApp();
   try { await checkAccess(savedAccessCode); unlockApp(); }
