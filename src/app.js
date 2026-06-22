@@ -10,12 +10,15 @@ const template = document.querySelector("#result-template");
 const clearHistory = document.querySelector("#clear-history");
 const openHistory = document.querySelector("#open-history");
 const switchAccess = document.querySelector("#switch-access");
+const toggleHistory = document.querySelector("#toggle-history");
 const referenceImage = document.querySelector("#referenceImage");
 const referenceImageName = document.querySelector("#referenceImageName");
 
 const storageKey = "fashion-ai-studio-history-v2";
 const accessKey = "fashion-ai-studio-access-code";
 const historyLimit = 24;
+const historyPreviewLimit = 6;
+let historyExpanded = false;
 let volatileHistory = [];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -237,9 +240,17 @@ const refreshJob = async (jobId, item) => {
   }
 };
 
+const updateHistoryToggle = (historyLength) => {
+  if (!toggleHistory) return;
+  const hasMore = historyLength > historyPreviewLimit;
+  toggleHistory.hidden = !hasMore;
+  toggleHistory.textContent = historyExpanded ? "收起历史记录" : `展开更多记录（${historyLength - historyPreviewLimit}）`;
+};
+
 const renderHistory = () => {
   const history = readHistory();
   results.innerHTML = "";
+  updateHistoryToggle(history.length);
   if (history.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -247,8 +258,9 @@ const renderHistory = () => {
     results.append(empty);
     return;
   }
-  for (const item of history) {
+  for (const [index, item] of history.entries()) {
     const node = template.content.firstElementChild.cloneNode(true);
+    if (!historyExpanded && index >= historyPreviewLimit) node.classList.add("is-collapsed-extra");
     const mediaUrl = findMediaUrl(item.result);
     const base64Image = findBase64Image(item.result);
     const jobId = getJobId(item.result);
@@ -318,6 +330,11 @@ accessForm.addEventListener("submit", async (event) => {
 
 switchAccess.addEventListener("click", () => { sessionStorage.removeItem(accessKey); lockApp(); });
 
+toggleHistory?.addEventListener("click", () => {
+  historyExpanded = !historyExpanded;
+  renderHistory();
+});
+
 referenceImage.addEventListener("change", () => {
   const files = Array.from(referenceImage.files || []);
   referenceImageName.textContent = files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
@@ -356,6 +373,7 @@ form.addEventListener("submit", async (event) => {
     }
     if (body.jobId) upsertHistoryItem({ ...historyItem, result: { ...historyItem.result, jobId: body.jobId } });
     else saveHistory([historyItem, ...readStoredHistory()]);
+    historyExpanded = false;
     renderHistory();
     setStatus("已完成");
   } catch (error) {
@@ -367,7 +385,7 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-clearHistory.addEventListener("click", () => { volatileHistory = []; localStorage.removeItem(storageKey); renderHistory(); });
+clearHistory.addEventListener("click", () => { volatileHistory = []; localStorage.removeItem(storageKey); historyExpanded = false; renderHistory(); });
 openHistory.addEventListener("click", () => { renderHistory(); results.scrollIntoView({ behavior: "smooth", block: "nearest" }); setStatus("历史记录"); });
 
 const initAccess = async () => {
