@@ -37,6 +37,20 @@ const getEnv = (key: string) => {
   return (netlify?.env?.get?.(key) ?? process.env?.[key] ?? fallbackEnv[key] ?? "").trim();
 };
 
+const compactPayload = (payload: GenerateRequest, prompt: string): GenerateRequest => {
+  const { accessCode: _accessCode, referenceImage, referenceImages, ...rest } = payload;
+  const refs = [
+    ...(Array.isArray(referenceImages) ? referenceImages : []),
+    referenceImage,
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  const uniqueRefs = Array.from(new Set(refs)).slice(0, 1);
+  return {
+    ...rest,
+    prompt,
+    ...(uniqueRefs.length ? { referenceImages: uniqueRefs } : {}),
+  };
+};
+
 export default async (req: Request) => {
   if (req.method !== "POST") return json({ error: "POST requests only." }, 405);
 
@@ -55,11 +69,12 @@ export default async (req: Request) => {
   const jobId = crypto.randomUUID();
   const store = getStore("ai-generation-jobs", { consistency: "strong" });
   const createdAt = new Date().toISOString();
+  const jobPayload = compactPayload(payload, prompt);
 
   await store.setJSON(jobId, {
     createdAt,
     jobId,
-    payload: { ...payload, prompt },
+    payload: jobPayload,
     prompt,
     status: "queued",
     updatedAt: createdAt,
