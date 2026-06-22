@@ -184,7 +184,7 @@ const resizeImage = (file) => new Promise((resolve, reject) => {
     const image = new Image();
     image.onerror = () => reject(new Error("参考图格式不支持"));
     image.onload = () => {
-      const maxSide = 640;
+      const maxSide = 512;
       const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
       const width = Math.round(image.width * scale);
       const height = Math.round(image.height * scale);
@@ -192,7 +192,7 @@ const resizeImage = (file) => new Promise((resolve, reject) => {
       canvas.width = width;
       canvas.height = height;
       canvas.getContext("2d").drawImage(image, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", 0.62));
+      resolve(canvas.toDataURL("image/jpeg", 0.55));
     };
     image.src = reader.result;
   };
@@ -338,7 +338,6 @@ form.addEventListener("submit", async (event) => {
     if (files.length > 0) {
       if (!files[0].type.startsWith("image/")) throw new Error("参考图必须是图片文件。");
       data.referenceImages = [await resizeImage(files[0])];
-      data.referenceImage = data.referenceImages[0];
     }
     const response = await fetch("/api/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
     const body = await parseJsonResponse(response);
