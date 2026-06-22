@@ -28,7 +28,7 @@ type StoredJob = {
 
 type RequestInfo = {
   clarity: string;
-  endpoint: "generations" | "edits";
+  endpoint: "generations" | "edits" | "mj_imagine";
   model: string;
   promptChanged: boolean;
   quality: string;
@@ -58,8 +58,18 @@ const getApiKey = async () => {
 
 const generationUrl = () => getEnv("AI_IMAGE_API_URL") || fallbackEnv.AI_IMAGE_API_URL;
 const editUrl = () => getEnv("AI_IMAGE_EDIT_API_URL") || generationUrl().replace(/\/images\/generations\/?$/, "/images/edits");
+const apiOrigin = () => {
+  try {
+    return new URL(generationUrl()).origin;
+  } catch {
+    return "https://yunwu.ai";
+  }
+};
+const midjourneyImagineUrl = () => getEnv("MIDJOURNEY_IMAGINE_API_URL") || `${apiOrigin()}/mj/submit/imagine`;
+const midjourneyTaskUrl = (taskId: string) => (getEnv("MIDJOURNEY_TASK_FETCH_URL") || `${apiOrigin()}/mj/task/{taskId}/fetch`).replace("{taskId}", encodeURIComponent(taskId));
 
-const normalizeModel = (model?: string) => (String(model || "").toLowerCase().trim() === "image2" ? "gpt-image-2" : "gpt-image-2");
+const isMidjourneyModel = (model?: string) => ["midjourney", "mj_imagine", "mj-imagine"].includes(String(model || "").toLowerCase().trim());
+const normalizeModel = (model?: string) => (isMidjourneyModel(model) ? "midjourney" : "gpt-image-2");
 const normalizeQuality = (quality?: string) => {
   const value = String(quality || "medium").toLowerCase();
   if (["low", "medium", "high"].includes(value)) return value;
@@ -114,14 +124,18 @@ const formatApiError = (message: string) => {
 };
 
 const extractImageUrls = (data: unknown) => {
-  const value = data as { data?: Array<{ b64_json?: string; url?: string }>; images?: Array<{ b64_json?: string; url?: string } | string>; output?: Array<{ b64_json?: string; url?: string } | string>; url?: string };
+  const value = data as { data?: Array<{ b64_json?: string; url?: string; imageUrl?: string; image_url?: string }>; images?: Array<{ b64_json?: string; url?: string; imageUrl?: string; image_url?: string } | string>; output?: Array<{ b64_json?: string; url?: string; imageUrl?: string; image_url?: string } | string>; imageUrl?: string; image_url?: string; url?: string };
   const items = value.data ?? value.images ?? value.output ?? [];
   const urls = items.map((item) => {
     if (typeof item === "string") return item;
     if (item?.url) return item.url;
+    if (item?.imageUrl) return item.imageUrl;
+    if (item?.image_url) return item.image_url;
     if (item?.b64_json) return `data:image/png;base64,${item.b64_json}`;
     return "";
   }).filter(Boolean);
+  if (!urls.length && value.imageUrl) urls.push(value.imageUrl);
+  if (!urls.length && value.image_url) urls.push(value.image_url);
   if (!urls.length && value.url) urls.push(value.url);
   return urls;
 };
@@ -141,6 +155,11 @@ const referenceFile = async (reference: string, index: number) => {
   return { blob, filename: `reference-${index + 1}.${extension}` };
 };
 
+const midjourneyPrompt = (prompt: string, ratio: string, negativePrompt?: string) => {
+  const noText = [negativePrompt?.trim(), "nudity, sexualized pose, explicit content, minor, child, watermark, text"].filter(Boolean).join(", ");
+  return [prompt, `--ar ${ratio}`, noText ? `--no ${noText}` : ""].filter(Boolean).join(" ");
+};
+
 const build = (payload: GenerateRequest) => {
   const model = normalizeModel(payload.model);
   const quality = normalizeQuality(payload.quality);
@@ -151,8 +170,10 @@ const build = (payload: GenerateRequest) => {
   const originalPrompt = payload.prompt?.trim() || "";
   const safePrompt = sanitizeFashionPrompt(originalPrompt);
   const negative = [payload.negativePrompt?.trim(), "nudity, sexualized pose, explicit content, minor, teenager, child, underwear focus, body exposure focus"].filter(Boolean).join(", ");
-  const prompt = [safePrompt, negative ? `Avoid: ${negative}` : ""].filter(Boolean).join("\n\n");
-  const request: RequestInfo = { clarity, endpoint: references.length ? "edits" : "generations", model, promptChanged: safePrompt !== originalPrompt, quality, ratio, referenceCount: references.length, safePrompt, size };
+  const prompt = model === "midjourney"
+    ? midjourneyPrompt(safePrompt, ratio, payload.negativePrompt)
+    : [safePrompt, negative ? `Avoid: ${negative}` : ""].filter(Boolean).join("\n\n");
+  const request: RequestInfo = { clarity, endpoint: model === "midjourney" ? "mj_imagine" : references.length ? "edits" : "generations", model, promptChanged: safePrompt !== originalPrompt, quality, ratio, referenceCount: references.length, safePrompt, size };
   return { model, prompt, quality, references, request, size };
 };
 
@@ -165,8 +186,53 @@ const readResponse = async (response: Response) => {
   }
 };
 
+const extractTaskId = (data: unknown) => {
+  const value = data as { id?: string; jobId?: string; taskId?: string; result?: string | { id?: string; taskId?: string } };
+  if (typeof value.result === "string") return value.result;
+  return value.taskId || value.jobId || value.id || value.result?.taskId || value.result?.id || "";
+};
+
+const apiErrorMessage = (data: unknown, text: string, fallback: string) => {
+  const value = data as { code?: number; description?: string; error?: string | { message?: string }; failReason?: string; message?: string };
+  return (typeof value.error === "object" ? value.error.message : value.error) || value.message || value.description || value.failReason || text || fallback;
+};
+
+const callMidjourneyApi = async (payload: GenerateRequest) => {
+  const built = build(payload);
+  if (built.references.length) throw new Error("Midjourney 当前只支持文生图，请先移除参考图。");
+  const authorization = await auth();
+  const submitResponse = await fetch(midjourneyImagineUrl(), {
+    method: "POST",
+    headers: { [authorization.headerName]: authorization.value, "content-type": "application/json" },
+    body: JSON.stringify({ prompt: built.prompt }),
+  });
+  const submit = await readResponse(submitResponse);
+  const submitCode = (submit.data as { code?: number } | null)?.code;
+  if (!submitResponse.ok || (typeof submitCode === "number" && ![0, 1, 200].includes(submitCode))) {
+    throw new Error(apiErrorMessage(submit.data, submit.text, `${submitResponse.status} ${submitResponse.statusText}`));
+  }
+  const immediateUrls = extractImageUrls(submit.data);
+  if (immediateUrls.length) return { data: submit.data, request: built.request, urls: immediateUrls };
+  const taskId = extractTaskId(submit.data);
+  if (!taskId) throw new Error("Midjourney 已返回结果，但没有任务编号。");
+
+  for (let attempt = 1; attempt <= 150; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const taskResponse = await fetch(midjourneyTaskUrl(taskId), { headers: { [authorization.headerName]: authorization.value } });
+    const task = await readResponse(taskResponse);
+    if (!taskResponse.ok) throw new Error(apiErrorMessage(task.data, task.text, "Midjourney 任务查询失败。"));
+    const taskData = task.data as { failReason?: string; progress?: string; status?: string } | null;
+    const status = String(taskData?.status || "").toUpperCase();
+    const urls = extractImageUrls(task.data);
+    if (urls.length && (status === "SUCCESS" || taskData?.progress === "100%" || !status)) return { data: { submit: submit.data, task: task.data }, request: built.request, urls };
+    if (["FAILURE", "FAILED", "ERROR"].includes(status)) throw new Error(taskData?.failReason || "Midjourney 生成失败。");
+  }
+  throw new Error("Midjourney 仍在生成，请稍后再试。当前版本暂不支持超过 12 分钟的 Midjourney 任务。");
+};
+
 const callImageApi = async (payload: GenerateRequest) => {
   const built = build(payload);
+  if (built.model === "midjourney") return callMidjourneyApi(payload);
   const authorization = await auth();
   let response: Response;
 
@@ -192,12 +258,7 @@ const callImageApi = async (payload: GenerateRequest) => {
 
   const { data, text } = await readResponse(response);
   if (!response.ok) {
-    const message = (data as { error?: { message?: string }; message?: string })?.error?.message
-      ?? (data as { error?: string; message?: string })?.error
-      ?? (data as { message?: string })?.message
-      ?? text
-      ?? `${response.status} ${response.statusText}`;
-    throw new Error(formatApiError(String(message)));
+    throw new Error(formatApiError(apiErrorMessage(data, text, `${response.status} ${response.statusText}`)));
   }
 
   const urls = extractImageUrls(data);
