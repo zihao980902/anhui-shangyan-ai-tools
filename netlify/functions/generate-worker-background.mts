@@ -85,10 +85,10 @@ const sizeFor = (ratio: string, clarity: string, explicitSize?: string) => {
   return table[clarity]?.[ratio] ?? table["1K"]["1:1"];
 };
 
-const referencesFor = (payload: GenerateRequest) => [
+const referencesFor = (payload: GenerateRequest) => Array.from(new Set([
   ...(Array.isArray(payload.referenceImages) ? payload.referenceImages : []),
   payload.referenceImage,
-].filter((value): value is string => Boolean(value && value.trim())).slice(0, 6);
+].filter((value): value is string => Boolean(value && value.trim())))).slice(0, 1);
 
 const sanitizeFashionPrompt = (prompt: string) => {
   const replacements: Array<[RegExp, string]> = [
@@ -134,6 +134,13 @@ const auth = async () => {
   return { headerName, value: prefix ? `${prefix} ${apiKey}` : apiKey };
 };
 
+const referenceFile = async (reference: string, index: number) => {
+  const mime = /^data:([^;,]+)/.exec(reference)?.[1] || "image/jpeg";
+  const extension = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+  const blob = await (await fetch(reference)).blob();
+  return { blob, filename: `reference-${index + 1}.${extension}` };
+};
+
 const build = (payload: GenerateRequest) => {
   const model = normalizeModel(payload.model);
   const quality = normalizeQuality(payload.quality);
@@ -171,8 +178,8 @@ const callImageApi = async (payload: GenerateRequest) => {
     form.append("size", built.size);
     form.append("n", "1");
     for (let index = 0; index < built.references.length; index += 1) {
-      const blob = await (await fetch(built.references[index])).blob();
-      form.append("image", blob, `reference-${index + 1}.jpg`);
+      const file = await referenceFile(built.references[index], index);
+      form.append("image", file.blob, file.filename);
     }
     response = await fetch(editUrl(), { method: "POST", headers: { [authorization.headerName]: authorization.value }, body: form });
   } else {
@@ -207,30 +214,30 @@ export default async (req: Request) => {
   const saved = (await store.get(jobId, { type: "json" })) as StoredJob | null;
   const payload = body.payload ?? saved?.payload;
   const prompt = payload?.prompt?.trim() || saved?.prompt || "";
+  const baseJob = { createdAt: saved?.createdAt ?? new Date().toISOString(), jobId, prompt };
 
   const update = async (value: Record<string, unknown>) => store.setJSON(jobId, value);
   if (!payload?.prompt) {
-    await update({ completedAt: new Date().toISOString(), error: "Generation payload was not found.", jobId, prompt, status: "error" });
+    await update({ ...baseJob, completedAt: new Date().toISOString(), error: "Generation payload was not found.", status: "error" });
     return;
   }
 
-  await update({ ...(saved ?? {}), jobId, prompt, status: "running", updatedAt: new Date().toISOString() });
+  await update({ ...baseJob, status: "running", updatedAt: new Date().toISOString() });
 
   try {
     const result = await callImageApi(payload);
     await update({
+      ...baseJob,
       completedAt: new Date().toISOString(),
       imageUrl: result.urls[0],
       images: result.urls.map((url) => ({ url })),
-      jobId,
-      prompt,
       request: result.request,
       result: { imageUrl: result.urls[0], images: result.urls.map((url) => ({ url })), request: result.request, response: result.data },
       response: result.data,
       status: "done",
     });
   } catch (error) {
-    await update({ completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : "Generation failed.", jobId, prompt, status: "error" });
+    await update({ ...baseJob, completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : "Generation failed.", status: "error" });
   }
 };
 
