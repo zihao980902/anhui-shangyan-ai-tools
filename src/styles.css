@@ -55,6 +55,8 @@ input:focus, select:focus, textarea:focus { border-color: rgba(244,122,22,.72); 
 .upload-field input { border: 0; min-height: auto; padding: 0; background: transparent; }
 .upload-field strong { font-size: 15px; }
 .upload-field small { color: var(--muted); line-height: 1.5; }
+.model-note { margin: -6px 0 16px; padding: 12px 13px; border: 1px solid rgba(244,122,22,.2); border-radius: 8px; background: rgba(244,122,22,.07); color: #74400d; font-size: 13px; line-height: 1.55; }
+.is-midjourney .image2-control { display: none; }
 
 .primary-button, .ghost-button, .download-button { min-height: 44px; padding: 0 18px; border-radius: 8px; font-weight: 700; }
 .primary-button, .download-button { border: 0; background: linear-gradient(135deg, var(--ink), #34413e); color: #fff; }
@@ -70,8 +72,13 @@ input:focus, select:focus, textarea:focus { border-color: rgba(244,122,22,.72); 
 .result-card > p, .result-card pre { display: none; }
 .preview { display: grid; min-height: 210px; place-items: center; background: #f3f5f4; color: var(--muted); text-align: center; }
 .preview img, .preview video { display: block; width: 100%; height: auto; }
+.mj-split-grid { --mj-tile-ratio: 1 / 1; display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: rgba(23, 33, 32, 0.12); }
+.mj-crop { position: relative; aspect-ratio: var(--mj-tile-ratio); background-repeat: no-repeat; background-size: 200% 200%; background-color: #eef2f1; }
+.mj-crop span { position: absolute; left: 8px; top: 8px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 999px; background: rgba(255,255,255,.9); color: var(--ink); font-size: 12px; font-weight: 800; box-shadow: 0 6px 16px rgba(18,31,29,.16); }
 .result-actions { padding: 12px; }
 .result-actions .download-button { width: 100%; }
+.split-downloads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.split-downloads .download-button { min-height: 38px; padding: 0 10px; font-size: 13px; }
 .history-toggle { display: block; width: 100%; margin-top: 16px; }
 details { border-top: 1px solid var(--line); padding: 10px 12px 12px; color: var(--muted); font-size: 13px; }
 details summary { cursor: pointer; }
