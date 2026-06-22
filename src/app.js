@@ -22,6 +22,7 @@ let historyExpanded = false;
 let volatileHistory = [];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isMidjourneyModel = (model) => String(model || "").toLowerCase() === "midjourney";
 
 const clarityToResolution = (clarity) => {
   const value = String(clarity || "high").toLowerCase();
@@ -337,7 +338,20 @@ toggleHistory?.addEventListener("click", () => {
 
 referenceImage.addEventListener("change", () => {
   const files = Array.from(referenceImage.files || []);
+  const model = new FormData(form).get("model");
+  if (isMidjourneyModel(model)) {
+    referenceImageName.textContent = files.length > 0 ? "Midjourney 当前仅支持文生图，请不要上传参考图。" : "Midjourney 当前仅支持文生图。";
+    return;
+  }
   referenceImageName.textContent = files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
+});
+
+form.addEventListener("change", (event) => {
+  if (event.target?.name !== "model") return;
+  const files = Array.from(referenceImage.files || []);
+  referenceImageName.textContent = isMidjourneyModel(event.target.value)
+    ? "Midjourney 当前仅支持文生图。"
+    : files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
 });
 
 form.addEventListener("submit", async (event) => {
@@ -353,6 +367,7 @@ form.addEventListener("submit", async (event) => {
   setStatus("生成中", "busy");
   try {
     if (files.length > 0) {
+      if (isMidjourneyModel(data.model)) throw new Error("Midjourney 当前只支持文生图，请先移除参考图。");
       if (!files[0].type.startsWith("image/")) throw new Error("参考图必须是图片文件。");
       data.referenceImages = [await resizeImage(files[0])];
     }
