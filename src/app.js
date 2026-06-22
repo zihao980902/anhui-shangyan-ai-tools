@@ -13,7 +13,7 @@ const switchAccess = document.querySelector("#switch-access");
 const referenceImage = document.querySelector("#referenceImage");
 const referenceImageName = document.querySelector("#referenceImageName");
 
-const storageKey = "fashion-ai-studio-history";
+const storageKey = "fashion-ai-studio-history-v2";
 const accessKey = "fashion-ai-studio-access-code";
 const historyLimit = 24;
 let volatileHistory = [];
@@ -69,7 +69,12 @@ const compactValue = (value, depth = 0) => {
   }
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.slice(0, 12).map((item) => compactValue(item, depth + 1));
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [/^(b64_json|base64|image_base64)$/i.test(key) ? key : "", item]).map(([key, item]) => key ? [key, "[大图数据已省略]"] : [key, compactValue(item, depth + 1)]));
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      if (/^(b64_json|base64|image_base64)$/i.test(key)) return [key, "[大图数据已省略]"];
+      return [key, compactValue(item, depth + 1)];
+    }),
+  );
 };
 
 const findMediaUrl = (data) => {
