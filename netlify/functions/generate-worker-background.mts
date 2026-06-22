@@ -117,6 +117,7 @@ const sanitizeFashionPrompt = (prompt: string) => {
 };
 
 const formatApiError = (message: string) => {
+  if (/all_retries_failed/i.test(message)) return "Midjourney 代理多次重试都失败了。请先用更短、更简单的提示词测试；如果连续失败，通常是云雾 MJ 通道或分组暂时不可用。";
   if (/safety|safety_violation|sexual|rejected by the safety system/i.test(message)) {
     return "提示词被 AI 安全系统拦截。请改成服装展示表达，例如：短款上衣、潮流时装风、成人模特、展示服装版型和搭配；避免露脐、肚脐、辣妹、性感等身体或挑逗词。";
   }
@@ -155,10 +156,7 @@ const referenceFile = async (reference: string, index: number) => {
   return { blob, filename: `reference-${index + 1}.${extension}` };
 };
 
-const midjourneyPrompt = (prompt: string, ratio: string, negativePrompt?: string) => {
-  const noText = [negativePrompt?.trim(), "nudity, sexualized pose, explicit content, minor, child, watermark, text"].filter(Boolean).join(", ");
-  return [prompt, `--ar ${ratio}`, noText ? `--no ${noText}` : ""].filter(Boolean).join(" ");
-};
+const midjourneyPrompt = (prompt: string, ratio: string) => [prompt.trim(), `--ar ${ratio}`].filter(Boolean).join(" ");
 
 const build = (payload: GenerateRequest) => {
   const model = normalizeModel(payload.model);
@@ -168,10 +166,10 @@ const build = (payload: GenerateRequest) => {
   const size = sizeFor(ratio, clarity, payload.size);
   const references = referencesFor(payload);
   const originalPrompt = payload.prompt?.trim() || "";
-  const safePrompt = sanitizeFashionPrompt(originalPrompt);
+  const safePrompt = model === "midjourney" ? originalPrompt : sanitizeFashionPrompt(originalPrompt);
   const negative = [payload.negativePrompt?.trim(), "nudity, sexualized pose, explicit content, minor, teenager, child, underwear focus, body exposure focus"].filter(Boolean).join(", ");
   const prompt = model === "midjourney"
-    ? midjourneyPrompt(safePrompt, ratio, payload.negativePrompt)
+    ? midjourneyPrompt(safePrompt, ratio)
     : [safePrompt, negative ? `Avoid: ${negative}` : ""].filter(Boolean).join("\n\n");
   const request: RequestInfo = { clarity, endpoint: model === "midjourney" ? "mj_imagine" : references.length ? "edits" : "generations", model, promptChanged: safePrompt !== originalPrompt, quality, ratio, referenceCount: references.length, safePrompt, size };
   return { model, prompt, quality, references, request, size };
@@ -194,7 +192,7 @@ const extractTaskId = (data: unknown) => {
 
 const apiErrorMessage = (data: unknown, text: string, fallback: string) => {
   const value = data as { code?: number; description?: string; error?: string | { message?: string }; failReason?: string; message?: string };
-  return (typeof value.error === "object" ? value.error.message : value.error) || value.message || value.description || value.failReason || text || fallback;
+  return formatApiError((typeof value.error === "object" ? value.error.message : value.error) || value.message || value.description || value.failReason || text || fallback);
 };
 
 const callMidjourneyApi = async (payload: GenerateRequest) => {
@@ -204,7 +202,7 @@ const callMidjourneyApi = async (payload: GenerateRequest) => {
   const submitResponse = await fetch(midjourneyImagineUrl(), {
     method: "POST",
     headers: { [authorization.headerName]: authorization.value, "content-type": "application/json" },
-    body: JSON.stringify({ prompt: built.prompt }),
+    body: JSON.stringify({ prompt: built.prompt, base64Array: [], state: "" }),
   });
   const submit = await readResponse(submitResponse);
   const submitCode = (submit.data as { code?: number } | null)?.code;
@@ -225,7 +223,7 @@ const callMidjourneyApi = async (payload: GenerateRequest) => {
     const status = String(taskData?.status || "").toUpperCase();
     const urls = extractImageUrls(task.data);
     if (urls.length && (status === "SUCCESS" || taskData?.progress === "100%" || !status)) return { data: { submit: submit.data, task: task.data }, request: built.request, urls };
-    if (["FAILURE", "FAILED", "ERROR"].includes(status)) throw new Error(taskData?.failReason || "Midjourney 生成失败。");
+    if (["FAILURE", "FAILED", "ERROR"].includes(status)) throw new Error(apiErrorMessage(task.data, "", "Midjourney 生成失败。"));
   }
   throw new Error("Midjourney 仍在生成，请稍后再试。当前版本暂不支持超过 12 分钟的 Midjourney 任务。");
 };
