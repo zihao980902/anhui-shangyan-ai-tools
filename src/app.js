@@ -31,26 +31,10 @@ const ratioToSize = (ratio, clarity) => {
   const value = String(ratio || "1:1");
   const resolution = clarityToResolution(clarity);
   const sizes = {
-    "1K": {
-      "1:1": "1024x1024",
-      "4:5": "1024x1280",
-      "9:16": "1024x1536",
-      "16:9": "1536x1024",
-    },
-    "2K": {
-      "1:1": "2048x2048",
-      "4:5": "1638x2048",
-      "9:16": "1536x2048",
-      "16:9": "2048x1536",
-    },
-    "4K": {
-      "1:1": "4096x4096",
-      "4:5": "3072x3840",
-      "9:16": "2160x3840",
-      "16:9": "3840x2160",
-    },
+    "1K": { "1:1": "1024x1024", "4:5": "1024x1280", "9:16": "1024x1536", "16:9": "1536x1024" },
+    "2K": { "1:1": "2048x2048", "4:5": "1638x2048", "9:16": "1536x2048", "16:9": "2048x1536" },
+    "4K": { "1:1": "4096x4096", "4:5": "3072x3840", "9:16": "2160x3840", "16:9": "3840x2160" },
   };
-
   return sizes[resolution]?.[value] || sizes["1K"]["1:1"];
 };
 
@@ -61,8 +45,8 @@ const setStatus = (text, tone = "ready") => {
 
 const normalizeError = (message) => {
   const text = String(message || "");
-  if (/fetch failed|network|ENOTFOUND|ECONN|ETIMEDOUT|timeout/i.test(text)) {
-    return "AI 服务连接失败，请稍后重试。";
+  if (/failed to fetch|fetch failed|network|ENOTFOUND|ECONN|ETIMEDOUT|timeout/i.test(text)) {
+    return "连接生成接口失败。通常是参考图仍然太大、网络中断，或浏览器缓存还没刷新。请按 Ctrl + F5 后先用 1 张参考图再试。";
   }
   return text;
 };
@@ -85,36 +69,24 @@ const compactValue = (value, depth = 0) => {
   }
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.slice(0, 12).map((item) => compactValue(item, depth + 1));
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => {
-      if (/^(b64_json|base64|image_base64)$/i.test(key)) return [key, "[大图数据已省略]"];
-      return [key, compactValue(item, depth + 1)];
-    }),
-  );
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [/^(b64_json|base64|image_base64)$/i.test(key) ? key : "", item]).map(([key, item]) => key ? [key, "[大图数据已省略]"] : [key, compactValue(item, depth + 1)]));
 };
 
 const findMediaUrl = (data) => {
   const stack = [data];
   const keys = ["imageUrl", "url", "mediaUrl", "image_url", "video_url", "output", "src"];
-
   while (stack.length) {
     const item = stack.shift();
     if (!item) continue;
     if (typeof item === "string" && (/^https?:\/\//.test(item) || /^data:image\//.test(item))) return item;
     if (typeof item !== "object") continue;
-
     for (const key of keys) {
       const value = item[key];
-      if (typeof value === "string" && (/^https?:\/\//.test(value) || /^data:image\//.test(value))) {
-        return value;
-      }
+      if (typeof value === "string" && (/^https?:\/\//.test(value) || /^data:image\//.test(value))) return value;
     }
-
     if (Array.isArray(item)) stack.push(...item);
     else stack.push(...Object.values(item));
   }
-
   return "";
 };
 
@@ -139,23 +111,8 @@ const compactHistoryItem = (item) => {
   const result = item?.result || {};
   const mediaUrl = findMediaUrl(result);
   const compactedResult = compactValue(result);
-
-  if (
-    mediaUrl
-    && !mediaUrl.startsWith("data:")
-    && compactedResult
-    && typeof compactedResult === "object"
-    && !Array.isArray(compactedResult)
-  ) {
-    compactedResult.imageUrl = mediaUrl;
-  }
-
-  return {
-    createdAt: item?.createdAt || new Date().toISOString(),
-    mode: item?.mode === "video" ? "video" : "image",
-    prompt: String(item?.prompt || "").slice(0, 1200),
-    result: compactedResult,
-  };
+  if (mediaUrl && !mediaUrl.startsWith("data:") && compactedResult && typeof compactedResult === "object" && !Array.isArray(compactedResult)) compactedResult.imageUrl = mediaUrl;
+  return { createdAt: item?.createdAt || new Date().toISOString(), mode: item?.mode === "video" ? "video" : "image", prompt: String(item?.prompt || "").slice(0, 1200), result: compactedResult };
 };
 
 const readStoredHistory = () => {
@@ -172,15 +129,13 @@ const readStoredHistory = () => {
 const readHistory = () => {
   const merged = [...volatileHistory, ...readStoredHistory()];
   const seen = new Set();
-  return merged
-    .filter((item) => {
-      const result = item.result || {};
-      const key = getJobId(result) || `${item.createdAt}-${findMediaUrl(result)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, historyLimit);
+  return merged.filter((item) => {
+    const result = item.result || {};
+    const key = getJobId(result) || `${item.createdAt}-${findMediaUrl(result)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, historyLimit);
 };
 
 const saveHistory = (items) => {
@@ -199,10 +154,7 @@ const saveHistory = (items) => {
 const upsertHistoryItem = (item) => {
   const next = compactHistoryItem(item);
   const nextJobId = getJobId(next.result);
-  const stored = readStoredHistory().filter((historyItem) => {
-    if (!nextJobId) return historyItem.createdAt !== next.createdAt;
-    return getJobId(historyItem.result) !== nextJobId;
-  });
+  const stored = readStoredHistory().filter((historyItem) => !nextJobId ? historyItem.createdAt !== next.createdAt : getJobId(historyItem.result) !== nextJobId);
   saveHistory([next, ...stored]);
 };
 
@@ -210,52 +162,37 @@ const waitForJob = async (jobId, pendingItem) => {
   for (let attempt = 1; attempt <= 240; attempt += 1) {
     const response = await fetch(`/api/result/${jobId}`);
     const body = await parseJsonResponse(response);
-
-    if (!response.ok || body.ok === false || body.status === "error") {
-      throw new Error(body.error || "生成失败");
-    }
-
-    const updatedItem = {
-      ...pendingItem,
-      result: {
-        ...body,
-        jobId,
-      },
-    };
-    upsertHistoryItem(updatedItem);
-
+    if (!response.ok || body.ok === false || body.status === "error") throw new Error(body.error || "生成失败");
+    upsertHistoryItem({ ...pendingItem, result: { ...body, jobId } });
     if (body.status === "done") return body;
-
     renderHistory();
     setStatus(`生成中 ${attempt}`, "busy");
     await sleep(5000);
   }
-
   throw new Error("后台仍在生成，请稍后点历史记录里的“刷新结果”。");
 };
 
-const resizeImage = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("参考图读取失败"));
-    reader.onload = () => {
-      const image = new Image();
-      image.onerror = () => reject(new Error("参考图格式不支持"));
-      image.onload = () => {
-        const maxSide = 1024;
-        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
-        const width = Math.round(image.width * scale);
-        const height = Math.round(image.height * scale);
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(image, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.78));
-      };
-      image.src = reader.result;
+const resizeImage = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error("参考图读取失败"));
+  reader.onload = () => {
+    const image = new Image();
+    image.onerror = () => reject(new Error("参考图格式不支持"));
+    image.onload = () => {
+      const maxSide = 640;
+      const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+      const width = Math.round(image.width * scale);
+      const height = Math.round(image.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(image, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.62));
     };
-    reader.readAsDataURL(file);
-  });
+    image.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
 
 const downloadDirect = (url, filename) => {
   const link = document.createElement("a");
@@ -267,17 +204,9 @@ const downloadDirect = (url, filename) => {
 };
 
 const downloadMediaUrl = async (url, filename) => {
-  if (url.startsWith("data:")) {
-    downloadDirect(url, filename);
-    return;
-  }
-
+  if (url.startsWith("data:")) return downloadDirect(url, filename);
   try {
-    const response = await fetch("/api/download", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accessCode: sessionStorage.getItem(accessKey) || "", filename, url }),
-    });
+    const response = await fetch("/api/download", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessCode: sessionStorage.getItem(accessKey) || "", filename, url }) });
     if (!response.ok) throw new Error("下载失败");
     const blob = await response.blob();
     const objectUrl = URL.createObjectURL(blob);
@@ -294,14 +223,7 @@ const refreshJob = async (jobId, item) => {
     const response = await fetch(`/api/result/${jobId}`);
     const body = await parseJsonResponse(response);
     if (!response.ok || body.status === "error") throw new Error(body.error || "刷新失败");
-
-    upsertHistoryItem({
-      ...item,
-      result: {
-        ...body,
-        jobId,
-      },
-    });
+    upsertHistoryItem({ ...item, result: { ...body, jobId } });
     renderHistory();
     setStatus(body.status === "done" ? "已完成" : "仍在生成", body.status === "done" ? "ready" : "busy");
   } catch (error) {
@@ -313,7 +235,6 @@ const refreshJob = async (jobId, item) => {
 const renderHistory = () => {
   const history = readHistory();
   results.innerHTML = "";
-
   if (history.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -321,33 +242,19 @@ const renderHistory = () => {
     results.append(empty);
     return;
   }
-
   for (const item of history) {
     const node = template.content.firstElementChild.cloneNode(true);
-    const title = node.querySelector("strong");
-    const time = node.querySelector("time");
-    const prompt = node.querySelector("p");
-    const details = node.querySelector("pre");
-    const preview = node.querySelector(".preview");
-    const actions = node.querySelector(".result-actions");
     const mediaUrl = findMediaUrl(item.result);
     const base64Image = findBase64Image(item.result);
     const jobId = getJobId(item.result);
     const status = item.result?.status;
     const filename = `shangyan-ai-${new Date(item.createdAt).getTime()}.png`;
-
-    title.textContent = item.mode === "video" ? "AI 视频" : "AI 生图";
-    time.textContent = new Date(item.createdAt).toLocaleString("zh-CN");
-    prompt.hidden = true;
-    details.textContent = JSON.stringify(
-      {
-        prompt: item.prompt,
-        result: compactValue(item.result),
-      },
-      null,
-      2,
-    );
-
+    node.querySelector("strong").textContent = item.mode === "video" ? "AI 视频" : "AI 生图";
+    node.querySelector("time").textContent = new Date(item.createdAt).toLocaleString("zh-CN");
+    node.querySelector("p").hidden = true;
+    node.querySelector("pre").textContent = JSON.stringify({ prompt: item.prompt, result: compactValue(item.result) }, null, 2);
+    const preview = node.querySelector(".preview");
+    const actions = node.querySelector(".result-actions");
     if (mediaUrl) {
       const isVideo = item.mode === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(mediaUrl);
       const media = document.createElement(isVideo ? "video" : "img");
@@ -355,7 +262,6 @@ const renderHistory = () => {
       if (isVideo) media.controls = true;
       else media.alt = item.prompt;
       preview.append(media);
-
       const button = document.createElement("button");
       button.className = "download-button";
       button.type = "button";
@@ -367,7 +273,6 @@ const renderHistory = () => {
       image.src = `data:image/png;base64,${base64Image}`;
       image.alt = item.prompt;
       preview.append(image);
-
       const button = document.createElement("button");
       button.className = "download-button";
       button.type = "button";
@@ -385,27 +290,15 @@ const renderHistory = () => {
     } else {
       preview.textContent = "接口已返回结果，请展开查看原始内容。";
     }
-
     results.append(node);
   }
 };
 
-const lockApp = () => {
-  appShell.classList.add("is-locked");
-  accessScreen.classList.add("is-open");
-};
-
-const unlockApp = () => {
-  appShell.classList.remove("is-locked");
-  accessScreen.classList.remove("is-open");
-};
+const lockApp = () => { appShell.classList.add("is-locked"); accessScreen.classList.add("is-open"); };
+const unlockApp = () => { appShell.classList.remove("is-locked"); accessScreen.classList.remove("is-open"); };
 
 const checkAccess = async (accessCode) => {
-  const response = await fetch("/api/check-access", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ accessCode }),
-  });
+  const response = await fetch("/api/check-access", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessCode }) });
   const body = await parseJsonResponse(response);
   if (!response.ok) throw new Error(body.error || "访问码校验失败");
 };
@@ -414,26 +307,15 @@ accessForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   accessError.textContent = "";
   const accessCode = new FormData(accessForm).get("accessCode");
-  try {
-    await checkAccess(accessCode);
-    sessionStorage.setItem(accessKey, accessCode);
-    unlockApp();
-  } catch (error) {
-    accessError.textContent = error instanceof Error ? error.message : String(error);
-  }
+  try { await checkAccess(accessCode); sessionStorage.setItem(accessKey, accessCode); unlockApp(); }
+  catch (error) { accessError.textContent = error instanceof Error ? error.message : String(error); }
 });
 
-switchAccess.addEventListener("click", () => {
-  sessionStorage.removeItem(accessKey);
-  lockApp();
-});
+switchAccess.addEventListener("click", () => { sessionStorage.removeItem(accessKey); lockApp(); });
 
 referenceImage.addEventListener("change", () => {
   const files = Array.from(referenceImage.files || []);
-  referenceImageName.textContent =
-    files.length > 0
-      ? `已选择 ${files.length} 张：${files.map((item) => item.name).join("、")}`
-      : "可多选商品图、模特图、风格图，最多取前 6 张。";
+  referenceImageName.textContent = files.length > 0 ? `已选择 ${files.length} 张，本次先使用第 1 张：${files[0].name}` : "可上传商品图、模特图、风格图。当前优先使用 1 张参考图。";
 });
 
 form.addEventListener("submit", async (event) => {
@@ -441,65 +323,33 @@ form.addEventListener("submit", async (event) => {
   const formData = new FormData(form);
   const data = Object.fromEntries(formData.entries());
   const files = Array.from(referenceImage.files || []);
-
   data.accessCode = sessionStorage.getItem(accessKey) || "";
   data.resolution = clarityToResolution(data.clarity);
   data.size = ratioToSize(data.ratio, data.clarity);
   delete data.referenceImage;
-
   submitButton.disabled = true;
   setStatus("生成中", "busy");
-
   try {
     if (files.length > 0) {
-      if (files.some((file) => !file.type.startsWith("image/"))) throw new Error("参考图必须都是图片文件。");
-      data.referenceImages = await Promise.all(files.slice(0, 6).map((file) => resizeImage(file)));
+      if (!files[0].type.startsWith("image/")) throw new Error("参考图必须是图片文件。");
+      data.referenceImages = [await resizeImage(files[0])];
       data.referenceImage = data.referenceImages[0];
     }
-
-    const response = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const response = await fetch("/api/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
     const body = await parseJsonResponse(response);
     if (!response.ok || body.ok === false) throw new Error(body.error || "生成失败");
-
     const createdAt = new Date().toISOString();
-    const pendingItem = compactHistoryItem({
-      createdAt,
-      mode: data.mode,
-      prompt: data.prompt,
-      result: {
-        jobId: body.jobId,
-        status: body.status || "queued",
-        request: {
-          clarity: data.resolution,
-          model: data.model,
-          quality: data.quality,
-          ratio: data.ratio,
-          size: data.size,
-        },
-      },
-    });
-
-    if (body.jobId) {
-      upsertHistoryItem(pendingItem);
-      renderHistory();
-    }
-
+    const pendingItem = compactHistoryItem({ createdAt, mode: data.mode, prompt: data.prompt, result: { jobId: body.jobId, status: body.status || "queued", request: { clarity: data.resolution, model: data.model, quality: data.quality, ratio: data.ratio, size: data.size } } });
+    if (body.jobId) { upsertHistoryItem(pendingItem); renderHistory(); }
     const finalBody = body.jobId ? await waitForJob(body.jobId, pendingItem) : body;
     if (finalBody.ok === false) throw new Error(finalBody.error || "生成失败");
-
     const finishedAt = finalBody.completedAt || finalBody.finishedAt || finalBody.createdAt || new Date().toISOString();
     const rawResult = finalBody.result || finalBody;
     const historyItem = compactHistoryItem({ createdAt: finishedAt, mode: data.mode, prompt: data.prompt, result: rawResult });
-
     if (findMediaUrl(rawResult)?.startsWith("data:") || findBase64Image(rawResult)) {
       volatileHistory.unshift({ createdAt: finishedAt, mode: data.mode, prompt: data.prompt, result: rawResult });
       volatileHistory = volatileHistory.slice(0, 3);
     }
-
     if (body.jobId) upsertHistoryItem({ ...historyItem, result: { ...historyItem.result, jobId: body.jobId } });
     else saveHistory([historyItem, ...readStoredHistory()]);
     renderHistory();
@@ -513,32 +363,15 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-clearHistory.addEventListener("click", () => {
-  volatileHistory = [];
-  localStorage.removeItem(storageKey);
-  renderHistory();
-});
-
-openHistory.addEventListener("click", () => {
-  renderHistory();
-  results.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  setStatus("历史记录");
-});
+clearHistory.addEventListener("click", () => { volatileHistory = []; localStorage.removeItem(storageKey); renderHistory(); });
+openHistory.addEventListener("click", () => { renderHistory(); results.scrollIntoView({ behavior: "smooth", block: "nearest" }); setStatus("历史记录"); });
 
 const initAccess = async () => {
   renderHistory();
   const savedAccessCode = sessionStorage.getItem(accessKey);
-  if (!savedAccessCode) {
-    lockApp();
-    return;
-  }
-  try {
-    await checkAccess(savedAccessCode);
-    unlockApp();
-  } catch {
-    sessionStorage.removeItem(accessKey);
-    lockApp();
-  }
+  if (!savedAccessCode) return lockApp();
+  try { await checkAccess(savedAccessCode); unlockApp(); }
+  catch { sessionStorage.removeItem(accessKey); lockApp(); }
 };
 
 initAccess();
