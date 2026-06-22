@@ -118,6 +118,18 @@ const getJobId = (result) => {
   return result.jobId || result.id || result.result?.jobId || "";
 };
 
+const isMidjourneyResult = (item) => {
+  const result = item?.result || {};
+  return Boolean(
+    isMidjourneyModel(result.request?.model) ||
+      isMidjourneyModel(result.result?.request?.model) ||
+      result.response?.submit ||
+      result.response?.task ||
+      result.data?.submit ||
+      result.data?.task,
+  );
+};
+
 const compactHistoryItem = (item) => {
   const result = item?.result || {};
   const mediaUrl = findMediaUrl(result);
@@ -214,18 +226,107 @@ const downloadDirect = (url, filename) => {
   link.remove();
 };
 
+const getMediaBlob = async (url, filename) => {
+  if (url.startsWith("data:")) return (await fetch(url)).blob();
+  const response = await fetch("/api/download", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ accessCode: sessionStorage.getItem(accessKey) || "", filename, url }),
+  });
+  if (!response.ok) throw new Error("下载失败");
+  return response.blob();
+};
+
 const downloadMediaUrl = async (url, filename) => {
   if (url.startsWith("data:")) return downloadDirect(url, filename);
   try {
-    const response = await fetch("/api/download", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessCode: sessionStorage.getItem(accessKey) || "", filename, url }) });
-    if (!response.ok) throw new Error("下载失败");
-    const blob = await response.blob();
+    const blob = await getMediaBlob(url, filename);
     const objectUrl = URL.createObjectURL(blob);
     downloadDirect(objectUrl, filename);
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   } catch {
     window.open(url, "_blank", "noopener,noreferrer");
   }
+};
+
+const loadImageBlob = (blob) => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(blob);
+  const image = new Image();
+  image.onload = () => resolve({ image, objectUrl });
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    reject(new Error("图片读取失败"));
+  };
+  image.src = objectUrl;
+});
+
+const downloadMidjourneyCrop = async (url, filename, index) => {
+  let sourceUrl = "";
+  try {
+    setStatus(`切图 ${index + 1}`, "busy");
+    const blob = await getMediaBlob(url, filename);
+    const loaded = await loadImageBlob(blob);
+    sourceUrl = loaded.objectUrl;
+    const { image } = loaded;
+    const cropWidth = Math.floor(image.naturalWidth / 2);
+    const cropHeight = Math.floor(image.naturalHeight / 2);
+    const sx = (index % 2) * cropWidth;
+    const sy = Math.floor(index / 2) * cropHeight;
+    const canvas = document.createElement("canvas");
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    canvas.getContext("2d").drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    const cropBlob = await new Promise((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("切图失败")), "image/png"));
+    const objectUrl = URL.createObjectURL(cropBlob);
+    downloadDirect(objectUrl, filename.replace(/\.png$/i, `-${index + 1}.png`));
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    setStatus("已完成");
+  } catch (error) {
+    setStatus("切图失败", "error");
+    alert(normalizeError(error instanceof Error ? error.message : String(error)) || "四宫格切图失败，请先下载原图。 ");
+  } finally {
+    if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+  }
+};
+
+const applyMidjourneyPreviewRatio = (grid, url) => {
+  const image = new Image();
+  image.onload = () => {
+    if (image.naturalWidth && image.naturalHeight) grid.style.setProperty("--mj-tile-ratio", `${image.naturalWidth} / ${image.naturalHeight}`);
+  };
+  image.src = url;
+};
+
+const createMidjourneySplitPreview = (url) => {
+  const grid = document.createElement("div");
+  grid.className = "mj-split-grid";
+  applyMidjourneyPreviewRatio(grid, url);
+  const positions = ["0% 0%", "100% 0%", "0% 100%", "100% 100%"];
+  for (let index = 0; index < 4; index += 1) {
+    const tile = document.createElement("div");
+    tile.className = "mj-crop";
+    tile.style.backgroundImage = `url(${JSON.stringify(url)})`;
+    tile.style.backgroundPosition = positions[index];
+    const label = document.createElement("span");
+    label.textContent = String(index + 1);
+    tile.append(label);
+    grid.append(tile);
+  }
+  return grid;
+};
+
+const createMidjourneyDownloadButtons = (url, filename) => {
+  const group = document.createElement("div");
+  group.className = "split-downloads";
+  for (let index = 0; index < 4; index += 1) {
+    const button = document.createElement("button");
+    button.className = "download-button";
+    button.type = "button";
+    button.textContent = `下载第 ${index + 1} 张`;
+    button.addEventListener("click", () => downloadMidjourneyCrop(url, filename, index));
+    group.append(button);
+  }
+  return group;
 };
 
 const refreshJob = async (jobId, item) => {
@@ -269,6 +370,7 @@ const renderHistory = () => {
     const jobId = getJobId(item.result);
     const status = item.result?.status;
     const filename = `shangyan-ai-${new Date(item.createdAt).getTime()}.png`;
+    const shouldSplitMidjourney = isMidjourneyResult(item);
     node.querySelector("strong").textContent = item.mode === "video" ? "AI 视频" : "AI 生图";
     node.querySelector("time").textContent = new Date(item.createdAt).toLocaleString("zh-CN");
     node.querySelector("p").hidden = true;
@@ -277,17 +379,22 @@ const renderHistory = () => {
     const actions = node.querySelector(".result-actions");
     if (mediaUrl) {
       const isVideo = item.mode === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(mediaUrl);
-      const media = document.createElement(isVideo ? "video" : "img");
-      media.src = mediaUrl;
-      if (isVideo) media.controls = true;
-      else media.alt = item.prompt;
-      preview.append(media);
-      const button = document.createElement("button");
-      button.className = "download-button";
-      button.type = "button";
-      button.textContent = "下载";
-      button.addEventListener("click", () => downloadMediaUrl(mediaUrl, filename));
-      actions.append(button);
+      if (!isVideo && shouldSplitMidjourney) {
+        preview.append(createMidjourneySplitPreview(mediaUrl));
+        actions.append(createMidjourneyDownloadButtons(mediaUrl, filename));
+      } else {
+        const media = document.createElement(isVideo ? "video" : "img");
+        media.src = mediaUrl;
+        if (isVideo) media.controls = true;
+        else media.alt = item.prompt;
+        preview.append(media);
+        const button = document.createElement("button");
+        button.className = "download-button";
+        button.type = "button";
+        button.textContent = "下载";
+        button.addEventListener("click", () => downloadMediaUrl(mediaUrl, filename));
+        actions.append(button);
+      }
     } else if (base64Image) {
       const image = document.createElement("img");
       image.src = `data:image/png;base64,${base64Image}`;
@@ -320,7 +427,7 @@ const updateModelMode = () => {
   form.classList.toggle("is-midjourney", isMj);
   if (modelNote) {
     modelNote.hidden = !isMj;
-    modelNote.textContent = "Midjourney 会返回四宫格预览图，清晰度档位和参考图不参与；需要单张高清图时可后续再接入放大功能。";
+    modelNote.textContent = "Midjourney 当前只接文生图，会先返回四宫格预览；生成目录会自动切成 4 张图，并提供单张下载。";
   }
   referenceImage.disabled = isMj;
   if (isMj) referenceImage.value = "";
