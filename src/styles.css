@@ -20,6 +20,7 @@ body {
 
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
+[hidden] { display: none !important; }
 
 .app-shell { min-height: 100vh; padding: 32px; }
 .app-shell.is-locked { filter: blur(2px); pointer-events: none; user-select: none; }
