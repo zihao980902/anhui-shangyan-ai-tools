@@ -36,13 +36,14 @@
               <option value="midjourney">Midjourney</option>
             </select>
           </label>
+          <p id="model-note" class="model-note" hidden></p>
 
           <label class="field">
             <span>提示词</span>
             <textarea name="prompt" rows="5" placeholder="描述商品、模特、场景、构图、光线、风格等..." required></textarea>
           </label>
 
-          <label class="field">
+          <label class="field image2-control">
             <span>反向提示词</span>
             <textarea name="negativePrompt" rows="2" placeholder="不想出现的元素，例如：低清晰度、手指畸形、文字水印"></textarea>
           </label>
@@ -58,7 +59,7 @@
               </select>
             </label>
 
-            <label class="field">
+            <label class="field image2-control">
               <span>质量</span>
               <select name="quality">
                 <option value="high" selected>高质量</option>
@@ -68,7 +69,7 @@
             </label>
           </div>
 
-          <label class="field">
+          <label class="field image2-control">
             <span>清晰度档位</span>
             <select name="clarity">
               <option value="low">1K 标准清晰度</option>
@@ -77,7 +78,7 @@
             </select>
           </label>
 
-          <label class="upload-field">
+          <label class="upload-field image2-control">
             <span>参考图</span>
             <input id="referenceImage" name="referenceImage" type="file" accept="image/*" multiple />
             <strong>上传参考图</strong>
