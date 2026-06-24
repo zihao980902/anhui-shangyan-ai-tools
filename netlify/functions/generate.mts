@@ -37,6 +37,12 @@ const getEnv = (key: string) => {
   return (netlify?.env?.get?.(key) ?? process.env?.[key] ?? fallbackEnv[key] ?? "").trim();
 };
 
+const isValidAccessCode = (accessCode?: string) => {
+  const configuredCode = getEnv("INTERNAL_ACCESS_CODE");
+  const fallbackCode = fallbackEnv.INTERNAL_ACCESS_CODE;
+  return Boolean(accessCode && (accessCode === configuredCode || accessCode === fallbackCode));
+};
+
 const compactPayload = (payload: GenerateRequest, prompt: string): GenerateRequest => {
   const { accessCode: _accessCode, referenceImage, referenceImages, ...rest } = payload;
   const refs = [
@@ -57,8 +63,7 @@ export default async (req: Request) => {
   const payload = (await req.json().catch(() => null)) as GenerateRequest | null;
   if (!payload) return json({ error: "Invalid JSON body." }, 400);
 
-  const configuredCode = getEnv("INTERNAL_ACCESS_CODE");
-  if (configuredCode && payload.accessCode !== configuredCode) {
+  if (!isValidAccessCode(payload.accessCode)) {
     return json({ error: "Access code is incorrect." }, 401);
   }
 
