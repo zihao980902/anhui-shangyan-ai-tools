@@ -21,12 +21,17 @@ const getEnv = (key: string) => {
   return (netlify?.env?.get?.(key) ?? process.env?.[key] ?? fallbackEnv[key] ?? "").trim();
 };
 
+const isValidAccessCode = (accessCode?: string) => {
+  const configuredCode = getEnv("INTERNAL_ACCESS_CODE");
+  const fallbackCode = fallbackEnv.INTERNAL_ACCESS_CODE;
+  return Boolean(accessCode && (accessCode === configuredCode || accessCode === fallbackCode));
+};
+
 export default async (req: Request) => {
   if (req.method !== "POST") return json({ error: "POST requests only." }, 405);
 
   const body = (await req.json().catch(() => ({}))) as { accessCode?: string };
-  const configuredCode = getEnv("INTERNAL_ACCESS_CODE");
-  if (configuredCode && body.accessCode !== configuredCode) {
+  if (!isValidAccessCode(body.accessCode)) {
     return json({ error: "Access code is incorrect." }, 401);
   }
 
