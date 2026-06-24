@@ -38,15 +38,6 @@ type RequestInfo = {
   size: string;
 };
 
-type BuiltImageRequest = {
-  model: string;
-  prompt: string;
-  quality: string;
-  references: string[];
-  request: RequestInfo;
-  size: string;
-};
-
 const fallbackEnv: Record<string, string> = {
   AI_IMAGE_API_AUTH_HEADER: "Authorization",
   AI_IMAGE_API_AUTH_PREFIX: "Bearer",
@@ -167,7 +158,7 @@ const referenceFile = async (reference: string, index: number) => {
 
 const midjourneyPrompt = (prompt: string, ratio: string) => [prompt.trim(), `--ar ${ratio}`].filter(Boolean).join(" ");
 
-const build = (payload: GenerateRequest): BuiltImageRequest => {
+const build = (payload: GenerateRequest) => {
   const model = normalizeModel(payload.model);
   const quality = normalizeQuality(payload.quality);
   const clarity = normalizeClarity(payload.clarity, payload.resolution);
@@ -203,40 +194,6 @@ const apiErrorMessage = (data: unknown, text: string, fallback: string) => {
   const value = data as { code?: number; description?: string; error?: string | { message?: string }; failReason?: string; message?: string };
   return formatApiError((typeof value.error === "object" ? value.error.message : value.error) || value.message || value.description || value.failReason || text || fallback);
 };
-
-const imageGenerationBody = (built: BuiltImageRequest, legacy = false) => legacy
-  ? { model: built.model, prompt: built.prompt, quality: built.quality, size: built.size, n: 1 }
-  : {
-      model: built.model,
-      prompt: built.prompt,
-      quality: built.quality,
-      size: built.request.clarity,
-      resolution: built.request.clarity,
-      aspect_ratio: built.request.ratio,
-      ratio: built.request.ratio,
-      target_size: built.size,
-      n: 1,
-    };
-
-const appendImageEditFields = async (form: FormData, built: BuiltImageRequest, legacy = false) => {
-  form.append("model", built.model);
-  form.append("prompt", built.prompt);
-  form.append("quality", built.quality);
-  form.append("size", legacy ? built.size : built.request.clarity);
-  form.append("n", "1");
-  if (!legacy) {
-    form.append("resolution", built.request.clarity);
-    form.append("aspect_ratio", built.request.ratio);
-    form.append("ratio", built.request.ratio);
-    form.append("target_size", built.size);
-  }
-  for (let index = 0; index < built.references.length; index += 1) {
-    const file = await referenceFile(built.references[index], index);
-    form.append("image", file.blob, file.filename);
-  }
-};
-
-const shouldRetryLegacyImageParams = (message: string) => /unrecognized|unknown|invalid|unsupported|bad request|400/i.test(message) && /size|resolution|aspect|ratio|target_size/i.test(message);
 
 const callMidjourneyApi = async (payload: GenerateRequest) => {
   const built = build(payload);
@@ -279,39 +236,32 @@ const callImageApi = async (payload: GenerateRequest) => {
 
   if (built.references.length) {
     const form = new FormData();
-    await appendImageEditFields(form, built);
-    response = await fetch(editUrl(), { method: "POST", headers: { [authorization.headerName]: authorization.value }, body: form });
-    let result = await readResponse(response);
-    if (!response.ok && shouldRetryLegacyImageParams(apiErrorMessage(result.data, result.text, `${response.status} ${response.statusText}`))) {
-      const legacyForm = new FormData();
-      await appendImageEditFields(legacyForm, built, true);
-      response = await fetch(editUrl(), { method: "POST", headers: { [authorization.headerName]: authorization.value }, body: legacyForm });
-      result = await readResponse(response);
+    form.append("model", built.model);
+    form.append("prompt", built.prompt);
+    form.append("quality", built.quality);
+    form.append("size", built.size);
+    form.append("n", "1");
+    for (let index = 0; index < built.references.length; index += 1) {
+      const file = await referenceFile(built.references[index], index);
+      form.append("image", file.blob, file.filename);
     }
-    if (!response.ok) throw new Error(formatApiError(apiErrorMessage(result.data, result.text, `${response.status} ${response.statusText}`)));
-    const urls = extractImageUrls(result.data);
-    if (!urls.length) throw new Error("The AI API returned no image URL.");
-    return { data: result.data, request: built.request, urls };
-  }
-
-  response = await fetch(generationUrl(), {
-    method: "POST",
-    headers: { [authorization.headerName]: authorization.value, "content-type": "application/json" },
-    body: JSON.stringify(imageGenerationBody(built)),
-  });
-  let result = await readResponse(response);
-  if (!response.ok && shouldRetryLegacyImageParams(apiErrorMessage(result.data, result.text, `${response.status} ${response.statusText}`))) {
+    response = await fetch(editUrl(), { method: "POST", headers: { [authorization.headerName]: authorization.value }, body: form });
+  } else {
     response = await fetch(generationUrl(), {
       method: "POST",
       headers: { [authorization.headerName]: authorization.value, "content-type": "application/json" },
-      body: JSON.stringify(imageGenerationBody(built, true)),
+      body: JSON.stringify({ model: built.model, prompt: built.prompt, quality: built.quality, size: built.size, n: 1 }),
     });
-    result = await readResponse(response);
   }
-  if (!response.ok) throw new Error(formatApiError(apiErrorMessage(result.data, result.text, `${response.status} ${response.statusText}`)));
-  const urls = extractImageUrls(result.data);
+
+  const { data, text } = await readResponse(response);
+  if (!response.ok) {
+    throw new Error(formatApiError(apiErrorMessage(data, text, `${response.status} ${response.statusText}`)));
+  }
+
+  const urls = extractImageUrls(data);
   if (!urls.length) throw new Error("The AI API returned no image URL.");
-  return { data: result.data, request: built.request, urls };
+  return { data, request: built.request, urls };
 };
 
 export default async (req: Request) => {
